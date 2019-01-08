@@ -71,16 +71,29 @@ final class ResourceOutputStream implements OutputStream
                         continue;
                     }
 
-                    if (!\is_resource($stream) || @\feof($stream)) {
+                    if (!\is_resource($stream)) {
                         throw new StreamException("The stream was closed by the peer");
                     }
 
-                    // Error reporting suppressed since fwrite() emits E_WARNING if the pipe is broken or the buffer is full.
-                    // Use conditional, because PHP doesn't like getting null passed
-                    if ($chunkSize) {
-                        $written = @\fwrite($stream, $data, $chunkSize);
-                    } else {
-                        $written = @\fwrite($stream, $data);
+                    // Catch errors with error handler. Previous `feof` was hanging sometimes in kubernetes
+                    set_error_handler(function ($errno, $msg, $file, $line) {
+                        // Skip EAGAIN errors
+                        if (strpos($msg, "errno=11") !== false) {
+                            return;
+                        }
+                        throw new StreamException("Error writing to stream: $msg ($errno)", $errno);
+                    });
+
+                    try {
+                        // Use conditional, because PHP doesn't like getting null passed
+                        if ($chunkSize) {
+                            $written = \fwrite($stream, $data, $chunkSize);
+                        } else {
+                            $written = \fwrite($stream, $data);
+                        }
+                    }
+                    finally {
+                        restore_error_handler();
                     }
 
                     \assert($written !== false, "Trying to write on a previously fclose()'d resource. Do NOT manually fclose() resources the loop still has a reference to.");
@@ -179,16 +192,29 @@ final class ResourceOutputStream implements OutputStream
                 return new Success(0);
             }
 
-            if (!\is_resource($this->resource) || @\feof($this->resource)) {
-                return new Failure(new StreamException("The stream was closed by the peer"));
+            if (!\is_resource($this->resource)) {
+                throw new StreamException("The stream was closed by the peer");
             }
 
-            // Error reporting suppressed since fwrite() emits E_WARNING if the pipe is broken or the buffer is full.
-            // Use conditional, because PHP doesn't like getting null passed.
-            if ($this->chunkSize) {
-                $written = @\fwrite($this->resource, $data, $this->chunkSize);
-            } else {
-                $written = @\fwrite($this->resource, $data);
+            // Catch errors with error handler. Previous `feof` was hanging sometimes in kubernetes
+            set_error_handler(function ($errno, $msg, $file, $line) {
+                // Skip EAGAIN errors
+                if (strpos($msg, "errno=11") !== false) {
+                    return;
+                }
+                throw new StreamException("Error writing to stream: $msg ($errno)", $errno);
+            });
+
+            try {
+                // Use conditional, because PHP doesn't like getting null passed
+                if ($this->chunkSize) {
+                    $written = \fwrite($this->resource, $data, $this->chunkSize);
+                } else {
+                    $written = \fwrite($this->resource, $data);
+                }
+            }
+            finally {
+                restore_error_handler();
             }
 
             \assert($written !== false, "Trying to write on a previously fclose()'d resource. Do NOT manually fclose() resources the loop still has a reference to.");
